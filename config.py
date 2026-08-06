@@ -24,6 +24,12 @@ class Config:
     act_fx = "identity"
     act_fx_o = "identity"
 
+    # Leak strength applied to RateCell/AttnRateCell dynamics; prevents cells from acting as pure integrators with no restoring force (root cause of NaN divergence).
+    leak_gamma = 0.05
+
+    # Hard clip bound on RateCell/AttnRateCell state z after each integration step; caps growth leak_gamma alone cannot fully bound. <= 0 disables clipping.
+    z_clip_bound = 10.0
+
     # Tokenizer selection: "BPE" (custom/BPE loader) or "tiktoken"
     tokenizer = "BPE"
     # When tokenizer == "tiktoken", tokenizer_name is used (e.g. "gpt2" or "cl100k_base")

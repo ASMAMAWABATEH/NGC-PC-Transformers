@@ -35,9 +35,13 @@ class Attention:
         dkey, *subkeys = random.split(dkey, 10)
 
         self.z_qkv = AttnRateCell(f"{prefix}z_qkv", n_units=n_embed, tau_m=tau_m, 
-                            act_fx=config.act_fx, batch_size=batch_size * seq_len )
+                            act_fx=config.act_fx, batch_size=batch_size * seq_len,
+                            prior=("gaussian", config.leak_gamma),
+                            z_clip_bound=config.z_clip_bound)
         self.z_attn = RateCell(f"{prefix}z_attn", n_units=n_embed, tau_m=tau_m,
-                            act_fx=config.act_fx, batch_size=batch_size * seq_len )
+                            act_fx=config.act_fx, batch_size=batch_size * seq_len,
+                            prior=("gaussian", config.leak_gamma),
+                            z_clip_bound=config.z_clip_bound)
         
         self.W_q = HebbianSynapse(f"{prefix}W_q", shape=(n_embed, n_embed), batch_size=batch_size * seq_len, eta=eta,
                                 weight_init=dist.fan_in_gaussian(),

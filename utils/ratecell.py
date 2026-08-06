@@ -1,4 +1,3 @@
-
 from jax import numpy as jnp, random, jit
 
 from ngclearn import compilable #from ngcsimlib.parser import compilable
@@ -9,7 +8,6 @@ from ngclearn.utils.model_utils import create_function, threshold_soft, \
 from ngclearn.utils.diffeq.ode_utils import get_integrator_code, \
                                             step_euler, step_rk2, step_rk4
 from ngcsimlib.logger import info
-
 
 def _dfz_internal_laplace(z, j, j_td, tau_m, leak_gamma): ## raw dynamics
     z_leak = jnp.sign(z) ## d/dx of Laplace is signum
@@ -155,11 +153,19 @@ class RateCell(JaxComponent): ## Rate-coded/real-valued cell
                 at an increase in computational cost (and simulation time)
 
         resist_scale: a scaling factor applied to incoming pressure `j` (default: 1)
+
+        z_clip_bound: hard clip bound applied to state `z` after each
+            integration step (and after any thresholding); <= 0 disables
+            clipping (Default: 0.). Introduced to prevent unbounded growth
+            of `z` when `prior`'s leak rate alone is insufficient to keep
+            the cell's dynamics bounded across many iterative inference
+            steps.
     """
 
     def __init__(
             self, name, n_units, tau_m, prior=("gaussian", 0.), act_fx="identity", output_scale=1., threshold=("none", 0.),
-            integration_type="euler", batch_size=1, resist_scale=1., shape=None, is_stateful=True, **kwargs):
+            integration_type="euler", batch_size=1, resist_scale=1., shape=None, is_stateful=True,
+            z_clip_bound=0., **kwargs):
         jax_comp_kwargs = {k: v for k, v in kwargs.items() if k not in ('omega_0',)}
         this_class_kwargs = {k: v for k, v in kwargs.items() if k in ('omega_0',)}
         super().__init__(name, **jax_comp_kwargs)
@@ -184,6 +190,7 @@ class RateCell(JaxComponent): ## Rate-coded/real-valued cell
         self.thresholdType = thresholdType ## type of thresholding function to use
         self.thr_lmbda = thr_lmbda ## scale to drive thresholding dynamics
         self.resist_scale = resist_scale ## a "resistance" scaling factor
+        self.z_clip_bound = z_clip_bound ## hard clip bound for z; <= 0 disables clipping
 
         ## integration properties
         self.integrationType = integration_type
@@ -236,6 +243,9 @@ class RateCell(JaxComponent): ## Rate-coded/real-valued cell
                 tmp_z = threshold_soft(tmp_z, self.thr_lmbda)
             elif self.thresholdType == "cauchy_threshold":
                 tmp_z = threshold_cauchy(tmp_z, self.thr_lmbda)
+            ## hard-clip z to prevent unbounded growth across the T-step E-loop
+            if self.z_clip_bound > 0.:
+                tmp_z = jnp.clip(tmp_z, -self.z_clip_bound, self.z_clip_bound)
             z = tmp_z ## pre-activation function value(s)
             zF = self.fx(z) * self.output_scale ## post-activation function value(s)
         else:
@@ -315,4 +325,3 @@ class RateCell(JaxComponent): ## Rate-coded/real-valued cell
                 "dynamics": "tau_m * dz/dt = Prior(z; gamma) + (j + j_td)",
                 "hyperparameters": hyperparams}
         return info
-
