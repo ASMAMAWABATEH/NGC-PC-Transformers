@@ -616,7 +616,10 @@ class NGCTransformer:
 
         ## ════════════════════════════════════════════════════════════════════════════════
         self.clamp_input(obs)
-        self.clamp_infer_target(lab)
+        if lab is not None:
+            self.clamp_infer_target(lab)
+        else:
+            self.projection.eq_target.mask.set(jnp.zeros((self.batch_size * self.seq_len, self.vocab_size)))
         self.project.run(t=0., dt=1.)
 
         ## get projected prediction (from the P-step)
@@ -645,37 +648,40 @@ class NGCTransformer:
         # ══════  Learning  ═════════════════════════════════════════
         EFE = 0.            ## expected free energy
         y_mu = jnp.zeros((self.batch_size * self.seq_len, self.vocab_size))  ## settled prediction
-        if adapt_synapses:
-            ## ════════════════════════════════
-            ## Perform several E-steps
-            for ts in range(0, self.T):
-                self.clamp_input(obs)
+
+        ## ════════════════════════════════
+        ## Perform several E-steps — always run inference, regardless of adapt_synapses
+        for ts in range(0, self.T):
+            self.clamp_input(obs)
+            if lab is not None:
                 self.clamp_target(lab)
-                self.advance.run(t=ts, dt=1.)
+            else:
+                self.output.e_out.mask.set(jnp.zeros((self.batch_size * self.seq_len, self.vocab_size)))
+            self.advance.run(t=ts, dt=1.)
 
-            ## ════════════════════════════════
-            ## get settled prediction
-            y_mu = self.z_actfx.zF.get()
+        ## ════════════════════════════════
+        ## get settled prediction
+        y_mu = self.z_actfx.zF.get()
 
-            ## calculate approximate EFE
-            L1 = self.embedding.e_embed.L.get()
-            L4 = self.output.e_out.L.get()
-            block_errors = 0.
-            for i in range(self.n_layers):
-                block = self.blocks[i]
-                block_errors += (block.attention.e_attn.L.get() + 
-                                 block.attention.e_qkv.L.get()
-                                 + block.mlp.e_mlp.L.get()
-                                 + block.mlp.e_mlp1.L.get()
-                                 )
+        ## calculate approximate EFE
+        L1 = self.embedding.e_embed.L.get()
+        L4 = self.output.e_out.L.get()
+        block_errors = 0.
+        for i in range(self.n_layers):
+            block = self.blocks[i]
+            block_errors += (block.attention.e_attn.L.get() + 
+                             block.attention.e_qkv.L.get()
+                             + block.mlp.e_mlp.L.get()
+                             + block.mlp.e_mlp1.L.get()
+                             )
 
-            EFE = L1 + block_errors + L4
+        EFE = L1 + block_errors + L4
 
-            ## ════════════════════════════════
-            ## Perform M-step
-            if adapt_synapses == True:
-                self.embedding_evolve.run()
-                self.evolve.run(t=self.T, dt=1.)
+        ## ════════════════════════════════
+        ## Perform M-step only when synaptic adaptation is enabled
+        if adapt_synapses:
+            self.embedding_evolve.run()
+            self.evolve.run(t=self.T, dt=1.)
 
         ##################################################
         ## skip E/M steps if just doing test-time inference

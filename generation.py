@@ -92,35 +92,37 @@ def generate_text(
             input_seq = jnp.pad(input_seq, ((0, 0), (0, pad_len)), constant_values=pad_token_id)
         
         # Forward pass (no target clamping during inference)
-        dummy_target = jnp.zeros((config.batch_size * config.seq_len, config.vocab_size))
+        # Tile the single sequence across the batch dim to match the loaded circuit's fixed batch shape
+        input_seq_batched = jnp.tile(input_seq, (config.batch_size, 1))
+        y_mu_inf, y_mu, _ = model.process(input_seq_batched, lab=None, adapt_synapses=False)
+        probs = y_mu.reshape(config.batch_size, config.seq_len, config.vocab_size)
 
-        # Forward pass
-
-        y_mu_inf, y_mu, _ = model.process(input_seq, dummy_target, adapt_synapses=False)
-        logits = y_mu_inf.reshape(config.batch_size, config.seq_len, config.vocab_size)
-
-        # Get logits for the last *real* token (excluding padding)
+        # Get probs for the last *real* token (excluding padding)
         if current_tokens.shape[1] > config.seq_len:
             last_pos = config.seq_len - 1
         else:
             last_pos = current_tokens.shape[1] - 1
-        next_logits = logits[0, last_pos, :] / temperature
+
+        next_probs = probs[0, last_pos, :]
+        if temperature != 1.0:
+            next_probs = jnp.clip(next_probs, 1e-20, 1.0)
+            next_probs = jnp.power(next_probs, 1.0 / temperature)
+        next_probs = next_probs / jnp.sum(next_probs)
 
         # Sample or take argmax
         if current_key is not None:
             if top_k is not None and top_k > 0:
                 top_k = min(top_k, config.vocab_size)
-                top_vals, top_idx = jax.lax.top_k(next_logits, k=top_k)
-                probs = jax.nn.softmax(top_vals)
+                top_vals, top_idx = jax.lax.top_k(next_probs, k=top_k)
+                top_vals = top_vals / jnp.sum(top_vals)
                 current_key, subkey = jax.random.split(current_key)
-                choice = jax.random.choice(subkey, a=top_k, p=probs)
+                choice = jax.random.choice(subkey, a=top_k, p=top_vals)
                 next_token = top_idx[choice]
             else:
-                probs = jax.nn.softmax(next_logits)
                 current_key, subkey = jax.random.split(current_key)
-                next_token = jax.random.choice(subkey, a=config.vocab_size, p=probs)
+                next_token = jax.random.choice(subkey, a=config.vocab_size, p=next_probs)
         else:
-            next_token = jnp.argmax(next_logits)
+            next_token = jnp.argmax(next_probs)
 
         # Append new token
         current_tokens = jnp.concatenate([current_tokens, next_token[None, None]], axis=1)
